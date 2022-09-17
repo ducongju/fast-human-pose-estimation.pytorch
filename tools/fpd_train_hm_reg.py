@@ -133,7 +133,7 @@ def main():
     train_type_list = ('FPD', 'FPD_thm_sreg', 'FPD_treg_shm', 'FPD_treg_sreg',
      'FPD_mid', 'FPD_bias', 'FPD_GThm_GTreg', 'FPD_hm_GTreg', 'FPD_GThm_reg',
      'FPD_hm_reg', 'FPD_GTreg_reg', 'FPD_GThm_hm', 'FPD_GTreg', 'FPD_reg', 
-     'FPD_GThm', 'FPD_hm')
+     'FPD_GThm', 'FPD_hm', 'FPD_GTihm', 'FPD_ihm')
 
     if train_type in train_type_list:
         tcfg = cfg.clone()
@@ -462,13 +462,13 @@ def main():
                 final_output_dir, tb_log_dir, writer_dict
                 )
 
-        elif train_type in ('FPD_GTreg', 'FPD_reg'):
+        elif train_type == 'FPD_GTreg':
             pose_criterion = L1JointLocationLoss(
             use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT, beta=cfg.LOSS.BETA
             ).cuda()
 
             # train for one epoch
-            train_dcj(cfg, train_loader, model, tmodel,
+            train_dcj(cfg, train_loader, model,
                 pose_criterion, optimizer, epoch,
                 final_output_dir, tb_log_dir, writer_dict)
 
@@ -478,13 +478,77 @@ def main():
                 final_output_dir, tb_log_dir, writer_dict
                 )
 
-        elif train_type in ('FPD_GThm', 'FPD_hm'):
+        elif train_type == 'FPD_reg':
+            pose_criterion = L1JointLocationLoss(
+            use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT, beta=cfg.LOSS.BETA
+            ).cuda()
+
+            # train for one epoch
+            train_dcj2(cfg, train_loader, model, tmodel,
+                pose_criterion, optimizer, epoch,
+                final_output_dir, tb_log_dir, writer_dict)
+
+            # evaluate on validation set
+            perf_indicator = validate_reg(
+                cfg, valid_loader, valid_dataset, model, pose_criterion,
+                final_output_dir, tb_log_dir, writer_dict
+                )
+
+        elif train_type == 'FPD_GThm':
             pose_criterion = JointsMSELoss(
             use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
             ).cuda()
 
             # train for one epoch
-            train_dcj(cfg, train_loader, model, tmodel,
+            train_dcj(cfg, train_loader, model,
+                pose_criterion, optimizer, epoch,
+                final_output_dir, tb_log_dir, writer_dict)
+
+            # evaluate on validation set
+            perf_indicator = validate(
+                cfg, valid_loader, valid_dataset, model, pose_criterion,
+                final_output_dir, tb_log_dir, writer_dict
+                )
+
+        elif train_type == 'FPD_hm':
+            pose_criterion = JointsMSELoss(
+            use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
+            ).cuda()
+
+            # train for one epoch
+            train_dcj2(cfg, train_loader, model, tmodel,
+                pose_criterion, optimizer, epoch,
+                final_output_dir, tb_log_dir, writer_dict)
+
+            # evaluate on validation set
+            perf_indicator = validate(
+                cfg, valid_loader, valid_dataset, model, pose_criterion,
+                final_output_dir, tb_log_dir, writer_dict
+                )
+
+        elif train_type == 'FPD_GTihm':
+            pose_criterion = JointsMSELoss(
+            use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
+            ).cuda()
+
+            # train for one epoch
+            train_dcj(cfg, train_loader, model,
+                pose_criterion, optimizer, epoch,
+                final_output_dir, tb_log_dir, writer_dict)
+
+            # evaluate on validation set
+            perf_indicator = validate(
+                cfg, valid_loader, valid_dataset, model, pose_criterion,
+                final_output_dir, tb_log_dir, writer_dict
+                )
+
+        elif train_type == 'FPD_ihm':
+            pose_criterion = JointsMSELoss(
+            use_target_weight=cfg.LOSS.USE_TARGET_WEIGHT
+            ).cuda()
+
+            # train for one epoch
+            train_dcj2(cfg, train_loader, model, tmodel,
                 pose_criterion, optimizer, epoch,
                 final_output_dir, tb_log_dir, writer_dict)
 

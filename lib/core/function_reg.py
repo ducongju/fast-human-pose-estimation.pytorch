@@ -1019,7 +1019,120 @@ def fpd_train_GThm_GTreg(config, train_loader, model, tmodel, pose_criterion, kd
 
 #################################################################################
 #################################################################################
-def train_dcj(config, train_loader, model, tmodel, criterion, optimizer, epoch,
+def train_dcj(config, train_loader, model, criterion, optimizer, epoch,
+          output_dir, tb_log_dir, writer_dict):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    acc = AverageMeter()
+
+    valid_type = config.KD.VALID_TYPE
+    train_type = config.KD.TRAIN_TYPE
+    beta = config.LOSS.BETA
+    coarse_to_fine = config.LOSS.COARSE_TO_FINE
+
+    model.train()
+
+    end = time.time()
+
+    for i, (input, target, target_weight, meta) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        # compute output
+        outputs = model(input)
+
+        target = target.cuda(non_blocking=True)
+        target_weight = target_weight.cuda(non_blocking=True)
+
+        target_reg = meta['joints'][:,:,0:2]
+        target_reg = target_reg.reshape((target_reg.shape[0], 16 * 2)).cuda()
+        target_reg = target_reg / 256 - 0.5
+
+        if train_type == 'FPD_GTreg':
+            if isinstance(outputs, list):
+                loss = criterion(outputs[0], target_reg, target_weight)
+                for output in outputs[1:]:
+                    loss += criterion(output, target_reg, target_weight)
+                output = outputs[-1]
+            else:
+                output = outputs
+                loss = criterion(output, target_reg, target_weight)
+
+        elif train_type == 'FPD_GThm':
+            if isinstance(outputs, list):
+                loss = criterion(outputs[0], target, target_weight)
+                for output in outputs[1:]:
+                    loss += criterion(output, target, target_weight)
+                output = outputs[-1]
+            else:
+                output = outputs
+                loss = criterion(output, target, target_weight)
+
+        elif train_type == 'FPD_GTihm':
+            if isinstance(outputs, list):
+                output_softmax = outputs[0].reshape((outputs[0].shape[0], config.MODEL.NUM_JOINTS, -1))
+                output_softmax = torch.nn.functional.softmax(output_softmax * beta, dim=2)
+                output_softmax = output_softmax.reshape((outputs[0].shape[0], config.MODEL.NUM_JOINTS, outputs[0].shape[3], outputs[0].shape[2]))
+                loss = criterion(output_softmax, target, target_weight)
+                for output in outputs[1:]:
+                    output_softmax = output.reshape((output.shape[0], config.MODEL.NUM_JOINTS, -1))
+                    output_softmax = torch.nn.functional.softmax(output_softmax * beta, dim=2)
+                    output_softmax = output_softmax.reshape((output.shape[0], config.MODEL.NUM_JOINTS, output.shape[3], output.shape[2]))
+                    loss += criterion(output_softmax, target, target_weight)
+                output = outputs[-1]
+            else:
+                outputs = outputs.reshape((outputs.shape[0], config.MODEL.NUM_JOINTS, -1))
+                outputs = torch.nn.functional.softmax(outputs * beta, dim=2)
+                outputs = outputs.reshape((outputs.shape[0], config.MODEL.NUM_JOINTS, outputs.shape[3], outputs.shape[2]))
+                output = outputs
+                loss = criterion(output, target, target_weight)
+
+        # compute gradient and do update step
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        # measure accuracy and record loss
+        losses.update(loss.item(), input.size(0))
+
+        if valid_type == 'hm':
+            _, avg_acc, cnt, pred = accuracy(output.detach().cpu().numpy(),
+                                             target.detach().cpu().numpy())
+        
+        elif valid_type == 'reg':
+            _, avg_acc, cnt, pred = accuracy_reg(output, target.detach().cpu().numpy(), beta)
+
+        acc.update(avg_acc, cnt)
+
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % config.PRINT_FREQ == 0:
+            msg = 'Epoch: [{0}][{1}/{2}]\t' \
+                  'Time {batch_time.val:.3f}s ({batch_time.avg:.3f}s)\t' \
+                  'Speed {speed:.1f} samples/s\t' \
+                  'Data {data_time.val:.3f}s ({data_time.avg:.3f}s)\t' \
+                  'Loss {loss.val:.5f} ({loss.avg:.5f})\t' \
+                  'Accuracy {acc.val:.3f} ({acc.avg:.3f})'.format(
+                      epoch, i, len(train_loader), batch_time=batch_time,
+                      speed=input.size(0)/batch_time.val,
+                      data_time=data_time, loss=losses, acc=acc)
+            logger.info(msg)
+
+            writer = writer_dict['writer']
+            global_steps = writer_dict['train_global_steps']
+            writer.add_scalar('train_loss', losses.val, global_steps)
+            writer.add_scalar('train_acc', acc.val, global_steps)
+            writer_dict['train_global_steps'] = global_steps + 1
+
+            prefix = '{}_{}'.format(os.path.join(output_dir, 'train'), i)
+            save_debug_images(config, input, meta, target, pred*4, output,
+                              prefix)
+
+
+def train_dcj2(config, train_loader, model, tmodel, criterion, optimizer, epoch,
           output_dir, tb_log_dir, writer_dict):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -1061,18 +1174,8 @@ def train_dcj(config, train_loader, model, tmodel, criterion, optimizer, epoch,
         target_reg = meta['joints'][:,:,0:2]
         target_reg = target_reg.reshape((target_reg.shape[0], 16 * 2)).cuda()
         target_reg = target_reg / 256 - 0.5
-
-        if train_type == 'FPD_GTreg':
-            if isinstance(outputs, list):
-                loss = criterion(outputs[0], target_reg, target_weight)
-                for output in outputs[1:]:
-                    loss += criterion(output, target_reg, target_weight)
-                output = outputs[-1]
-            else:
-                output = outputs
-                loss = criterion(output, target_reg, target_weight)
         
-        elif train_type == 'FPD_reg':
+        if train_type == 'FPD_reg':
             if isinstance(outputs, list):
                 loss = criterion(outputs[0], toutput_reg, target_weight)
                 for output in outputs[1:]:
@@ -1081,16 +1184,6 @@ def train_dcj(config, train_loader, model, tmodel, criterion, optimizer, epoch,
             else:
                 output = outputs
                 loss = criterion(output, toutput_reg, target_weight)
-
-        elif train_type == 'FPD_GThm':
-            if isinstance(outputs, list):
-                loss = criterion(outputs[0], target, target_weight)
-                for output in outputs[1:]:
-                    loss += criterion(output, target, target_weight)
-                output = outputs[-1]
-            else:
-                output = outputs
-                loss = criterion(output, target, target_weight)
 
         elif train_type == 'FPD_hm':
             if isinstance(outputs, list):
@@ -1102,6 +1195,25 @@ def train_dcj(config, train_loader, model, tmodel, criterion, optimizer, epoch,
                 output = outputs
                 loss = criterion(output, toutput, target_weight)
 
+        elif train_type == 'FPD_ihm':
+            if isinstance(outputs, list):
+                output_softmax = outputs[0].reshape((outputs[0].shape[0], config.MODEL.NUM_JOINTS, -1))
+                output_softmax = torch.nn.functional.softmax(output_softmax * beta, dim=2)
+                output_softmax = output_softmax.reshape((outputs[0].shape[0], config.MODEL.NUM_JOINTS, outputs[0].shape[3], outputs[0].shape[2]))
+                loss = criterion(output_softmax, toutput, target_weight)
+                for output in outputs[1:]:
+                    output_softmax = output.reshape((output.shape[0], config.MODEL.NUM_JOINTS, -1))
+                    output_softmax = torch.nn.functional.softmax(output_softmax * beta, dim=2)
+                    output_softmax = output_softmax.reshape((output.shape[0], config.MODEL.NUM_JOINTS, output.shape[3], output.shape[2]))
+                    loss += criterion(output_softmax, toutput, target_weight)
+                output = outputs[-1]
+            else:
+                outputs = outputs.reshape((outputs.shape[0], config.MODEL.NUM_JOINTS, -1))
+                outputs = torch.nn.functional.softmax(outputs * beta, dim=2)
+                outputs = outputs.reshape((outputs.shape[0], config.MODEL.NUM_JOINTS, outputs.shape[3], outputs.shape[2]))
+                output = outputs
+                loss = criterion(output, toutput, target_weight)
+
         # compute gradient and do update step
         optimizer.zero_grad()
         loss.backward()
@@ -1110,8 +1222,13 @@ def train_dcj(config, train_loader, model, tmodel, criterion, optimizer, epoch,
         # measure accuracy and record loss
         losses.update(loss.item(), input.size(0))
 
-        _, avg_acc, cnt, pred = accuracy(output.detach().cpu().numpy(),
-                                         target.detach().cpu().numpy())
+        if valid_type == 'hm':
+            _, avg_acc, cnt, pred = accuracy(output.detach().cpu().numpy(),
+                                             target.detach().cpu().numpy())
+        
+        elif valid_type == 'reg':
+            _, avg_acc, cnt, pred = accuracy_reg(output, target.detach().cpu().numpy(), beta)
+
         acc.update(avg_acc, cnt)
 
         # measure elapsed time
